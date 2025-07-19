@@ -1,0 +1,15 @@
+[dotenv@17.2.0] injecting env (0) from ../.env (tip: ⚙️  override existing env vars with { override: true })
+[dotenv@17.2.0] injecting env (0) from ../.env (tip: ⚙️  write to custom object with { processEnv: myObject })
+Backend starting on port: 9000
+Environment variables: { BACKEND_PORT: '9000', PORT: undefined }
+HTTP server listening on port: 9000
+Server address: { address: '0.0.0.0', family: 'IPv4', port: 9000 }
+[0mGET / [32m200 [0m5.206 ms - 176[0m
+✅ HTTP server test successful - status: 200
+A user connected: -4EqZAaQ9Rle8LdzAAAE
+A user connected: uQ3GpJMeSa4rR-aAAAAF
+A user connected: nAfX0cBd4RJ-kkTNAAAG
+A user connected: 4scU_U84_VlEGqnNAAAH
+[0mPOST /users/login [32m200 [0m126.612 ms - 238[0m
+[0mPOST /users/register [32m201 [0m104.626 ms - 42[0m
+[0mPOST /users/login [32m200 [0m72.375 ms - 244[0m

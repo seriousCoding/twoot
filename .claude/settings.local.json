@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm ls:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run dev:*)",
+      "Bash(pkill:*)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Bash(BACKEND_PORT=9000 node -r dotenv/config ./bin/www)",
+      "Bash(true)",
+      "Bash(BACKEND_PORT=9000 DOTENV_CONFIG_PATH=../.env nodemon -r dotenv/config ./bin/www)",
+      "Bash(npx nodemon:*)",
+      "Bash(BACKEND_PORT=9000 DOTENV_CONFIG_PATH=../.env node -r dotenv/config ./bin/www)",
+      "Bash(node:*)",
+      "Bash(npm start)",
+      "Bash(PORT=3001 npm start)",
+      "Bash(grep:*)",
+      "Bash(for:*)",
+      "Bash(do echo \"=== $file ===\")",
+      "Bash(done)",
+      "Bash(npm run:*)",
+      "Bash(npm start:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(mv:*)",
+      "Bash(npx knex migrate:*)",
+      "Bash(npx tailwindcss init:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm test)",
+      "Bash(sed:*)",
+      "Bash(awk:*)",
+      "Bash(wget:*)"
+    ],
+    "deny": []
+  }
+}
