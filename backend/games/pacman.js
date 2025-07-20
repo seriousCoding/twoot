@@ -29,6 +29,15 @@ class PacmanGame {
       [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
       [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     ];
+
+    // Ghost home and corner positions
+    this.GHOST_HOME = { x: 9, y: 9 };
+    this.CORNERS = {
+      'blinky': { x: 18, y: 0 },   // Top right
+      'pinky': { x: 0, y: 0 },     // Top left
+      'inky': { x: 18, y: 20 },    // Bottom right
+      'clyde': { x: 0, y: 20 }     // Bottom left
+    };
   }
 
   createRoom(roomId) {
@@ -46,7 +55,11 @@ class PacmanGame {
       powerPelletTimer: 0,
       gameTimer: 0,
       spectators: new Set(),
-      highScore: 0
+      highScore: 0,
+      modeTimer: 0,
+      currentMode: 'scatter', // scatter, chase
+      modePattern: [7, 20, 7, 20, 5, 20, 5], // seconds for each mode
+      modeIndex: 0
     };
     this.rooms.set(roomId, room);
     return room;
@@ -54,24 +67,62 @@ class PacmanGame {
 
   createGhosts() {
     return [
-      { id: 'blinky', x: 9, y: 9, direction: 'up', mode: 'chase', color: 'red' },
-      { id: 'pinky', x: 9, y: 10, direction: 'down', mode: 'chase', color: 'pink' },
-      { id: 'inky', x: 8, y: 10, direction: 'up', mode: 'chase', color: 'cyan' },
-      { id: 'clyde', x: 10, y: 10, direction: 'down', mode: 'chase', color: 'orange' }
+      { 
+        id: 'blinky', 
+        x: 9, y: 9, 
+        direction: 'up', 
+        mode: 'scatter', 
+        color: 'red',
+        targetX: 18, targetY: 0,
+        speed: 1,
+        personality: 'aggressive'
+      },
+      { 
+        id: 'pinky', 
+        x: 9, y: 10, 
+        direction: 'down', 
+        mode: 'scatter', 
+        color: 'pink',
+        targetX: 0, targetY: 0,
+        speed: 1,
+        personality: 'ambusher'
+      },
+      { 
+        id: 'inky', 
+        x: 8, y: 10, 
+        direction: 'up', 
+        mode: 'scatter', 
+        color: 'cyan',
+        targetX: 18, targetY: 20,
+        speed: 1,
+        personality: 'flanker'
+      },
+      { 
+        id: 'clyde', 
+        x: 10, y: 10, 
+        direction: 'down', 
+        mode: 'scatter', 
+        color: 'orange',
+        targetX: 0, targetY: 20,
+        speed: 1,
+        personality: 'patrol'
+      }
     ];
   }
 
-  joinRoom(roomId, playerId, playerName) {
+  joinGame(socket, playerName, roomId, aiMode, aiDifficulty) {
     let room = this.rooms.get(roomId);
     if (!room) {
       room = this.createRoom(roomId);
     }
+  
+    const playerId = socket.id;
 
     // Check if player is already in room
     if (room.players[playerId]) {
-      return { success: true, room, role: 'player' };
+      return room;
     }
-
+  
     // Only allow one player in single-player mode
     if (Object.keys(room.players).length === 0) {
       room.players[playerId] = {
@@ -88,12 +139,19 @@ class PacmanGame {
       room.gameState = 'playing';
       this.startGameLoop(roomId);
       
-      return { success: true, room, role: 'player' };
+      return room;
     } else {
       // Join as spectator
       room.spectators.add(playerId);
-      return { success: true, room, role: 'spectator' };
+      return room;
     }
+  }
+
+  handleAction(roomId, playerId, data) {
+    if (data.type === 'move') {
+      return this.movePlayer(roomId, playerId, data.direction);
+    }
+    return this.rooms.get(roomId);
   }
 
   movePlayer(roomId, playerId, direction) {
@@ -105,7 +163,7 @@ class PacmanGame {
     const player = room.players[playerId];
     player.nextDirection = direction;
     
-    return { success: true, room };
+    return { success: true, data: room };
   }
 
   updateGame(roomId) {
@@ -114,14 +172,31 @@ class PacmanGame {
 
     room.gameTimer++;
 
+    // Update mode timer and switch between scatter/chase
+    room.modeTimer++;
+    const currentModeTime = room.modePattern[room.modeIndex] * 20; // Convert to ticks (20 ticks per second)
+    
+    if (room.modeTimer >= currentModeTime) {
+      room.modeTimer = 0;
+      room.modeIndex = (room.modeIndex + 1) % room.modePattern.length;
+      room.currentMode = room.modeIndex % 2 === 0 ? 'scatter' : 'chase';
+      
+      // Update ghost modes (except frightened ghosts)
+      room.ghosts.forEach(ghost => {
+        if (ghost.mode !== 'frightened') {
+          ghost.mode = room.currentMode;
+        }
+      });
+    }
+
     // Update player position
     const playerId = Object.keys(room.players)[0];
     if (playerId) {
       this.updatePlayerPosition(room, playerId);
     }
 
-    // Update ghosts
-    this.updateGhosts(room);
+    // Update ghosts with advanced AI
+    this.updateGhostsAdvanced(room);
 
     // Check collisions
     this.checkCollisions(room);
@@ -133,7 +208,7 @@ class PacmanGame {
         room.powerPelletActive = false;
         room.ghosts.forEach(ghost => {
           if (ghost.mode === 'frightened') {
-            ghost.mode = 'chase';
+            ghost.mode = room.currentMode;
           }
         });
       }
@@ -198,48 +273,30 @@ class PacmanGame {
         room.pelletsRemaining--;
         room.powerPelletActive = true;
         room.powerPelletTimer = 200; // ~10 seconds at 20 FPS
+        
+        // Frighten all ghosts
         room.ghosts.forEach(ghost => {
           ghost.mode = 'frightened';
+          // Reverse direction
+          ghost.direction = this.reverseDirection(ghost.direction);
         });
       }
     }
   }
 
-  updateGhosts(room) {
+  updateGhostsAdvanced(room) {
     const playerId = Object.keys(room.players)[0];
     const player = room.players[playerId];
     if (!player) return;
 
     room.ghosts.forEach(ghost => {
-      // Simple AI - move towards player when in chase mode
-      if (ghost.mode === 'chase') {
-        const directions = ['up', 'down', 'left', 'right'];
-        let bestDirection = ghost.direction;
-        let bestDistance = Infinity;
-
-        directions.forEach(dir => {
-          const newPos = this.getNewPosition(ghost.x, ghost.y, dir);
-          if (this.isValidMove(room, newPos.x, newPos.y)) {
-            const distance = Math.abs(newPos.x - player.x) + Math.abs(newPos.y - player.y);
-            if (distance < bestDistance) {
-              bestDistance = distance;
-              bestDirection = dir;
-            }
-          }
-        });
-
-        ghost.direction = bestDirection;
-      } else if (ghost.mode === 'frightened') {
-        // Random movement when frightened
-        const directions = ['up', 'down', 'left', 'right'];
-        const validDirections = directions.filter(dir => {
-          const newPos = this.getNewPosition(ghost.x, ghost.y, dir);
-          return this.isValidMove(room, newPos.x, newPos.y);
-        });
-
-        if (validDirections.length > 0) {
-          ghost.direction = validDirections[Math.floor(Math.random() * validDirections.length)];
-        }
+      // Calculate target based on ghost personality and mode
+      this.setGhostTarget(ghost, player, room);
+      
+      // Find best direction using A* pathfinding
+      const nextDirection = this.findBestDirection(ghost, room);
+      if (nextDirection) {
+        ghost.direction = nextDirection;
       }
 
       // Move ghost
@@ -255,6 +312,113 @@ class PacmanGame {
     });
   }
 
+  setGhostTarget(ghost, player, room) {
+    if (room.powerPelletActive) {
+        // Run away! Choose a random valid direction away from player
+        ghost.mode = 'frightened';
+        // Simple run-away logic: try to move to a tile with greatest distance from player
+        // This can be improved with a more robust escape algorithm
+        return;
+    }
+    
+    // Switch back to normal mode after being frightened
+    if (ghost.mode === 'frightened') {
+        ghost.mode = room.currentMode;
+    }
+
+    switch(ghost.personality) {
+      case 'aggressive': // Blinky targets player directly
+        ghost.targetX = player.x;
+        ghost.targetY = player.y;
+        break;
+      case 'ambusher': // Pinky targets 4 tiles ahead of the player
+        const targetPos = this.getPositionAhead(player, 4);
+        ghost.targetX = targetPos.x;
+        ghost.targetY = targetPos.y;
+        break;
+      case 'flanker': // Inky's target is more complex (Blinky's pos + vector from Blinky to 2 tiles ahead of Pacman)
+        const blinky = room.ghosts.find(g => g.id === 'blinky');
+        const posAhead = this.getPositionAhead(player, 2);
+        if (blinky) {
+            ghost.targetX = posAhead.x + (posAhead.x - blinky.x);
+            ghost.targetY = posAhead.y + (posAhead.y - blinky.y);
+        }
+        break;
+      case 'patrol': // Clyde targets player if far away, otherwise goes to its corner
+        const distance = this.getDistance({x: ghost.x, y: ghost.y}, {x: player.x, y: player.y});
+        if (distance > 8) {
+          ghost.targetX = player.x;
+          ghost.targetY = player.y;
+        } else {
+          ghost.targetX = this.CORNERS.clyde.x;
+          ghost.targetY = this.CORNERS.clyde.y;
+        }
+        break;
+      default:
+        // Default to scatter mode target
+        ghost.targetX = this.CORNERS[ghost.id].x;
+        ghost.targetY = this.CORNERS[ghost.id].y;
+    }
+  }
+
+  getPositionAhead(player, tiles) {
+    let x = player.x;
+    let y = player.y;
+    
+    switch (player.direction) {
+      case 'up': y -= tiles; break;
+      case 'down': y += tiles; break;
+      case 'left': x -= tiles; break;
+      case 'right': x += tiles; break;
+    }
+    
+    return { x: Math.max(0, Math.min(this.MAZE_WIDTH - 1, x)), 
+             y: Math.max(0, Math.min(this.MAZE_HEIGHT - 1, y)) };
+  }
+
+  findBestDirection(ghost, room) {
+    const directions = ['up', 'down', 'left', 'right'];
+    let bestDirection = ghost.direction;
+    let bestScore = Infinity;
+    
+    // Prevent immediate reversal unless frightened
+    const reverseDir = this.reverseDirection(ghost.direction);
+    
+    directions.forEach(dir => {
+      if (dir === reverseDir && ghost.mode !== 'frightened') return;
+      
+      const newPos = this.getNewPosition(ghost.x, ghost.y, dir);
+      if (this.isValidMove(room, newPos.x, newPos.y)) {
+        const distance = this.getDistance(newPos, { x: ghost.targetX, y: ghost.targetY });
+        
+        // Add randomness for frightened mode
+        const score = ghost.mode === 'frightened' ? 
+          distance + Math.random() * 10 : distance;
+        
+        if (score < bestScore) {
+          bestScore = score;
+          bestDirection = dir;
+        }
+      }
+    });
+    
+    return bestDirection;
+  }
+
+  getDistance(pos1, pos2) {
+    return Math.sqrt(Math.pow(pos1.x - pos2.x, 2) + Math.pow(pos1.y - pos2.y, 2));
+  }
+
+  reverseDirection(direction) {
+    const reverses = {
+      'up': 'down',
+      'down': 'up',
+      'left': 'right',
+      'right': 'left'
+    };
+    return reverses[direction];
+  }
+
   checkCollisions(room) {
     const playerId = Object.keys(room.players)[0];
     const player = room.players[playerId];
@@ -265,19 +429,18 @@ class PacmanGame {
         if (ghost.mode === 'frightened') {
           // Eat ghost
           room.score += 200;
-          // Reset ghost to center
-          ghost.x = 9;
-          ghost.y = 9;
-          ghost.mode = 'chase';
+          ghost.x = this.GHOST_HOME.x;
+          ghost.y = this.GHOST_HOME.y;
+          ghost.mode = room.currentMode;
         } else {
-          // Player hit by ghost
+          // Player dies
           room.lives--;
-          // Reset positions
-          player.x = 9;
-          player.y = 15;
-          room.ghosts = this.createGhosts();
-          room.powerPelletActive = false;
-          room.powerPelletTimer = 0;
+          if (room.lives > 0) {
+            // Reset positions
+            player.x = 9;
+            player.y = 15;
+            room.ghosts = this.createGhosts();
+          }
         }
       }
     });
@@ -294,34 +457,39 @@ class PacmanGame {
   }
 
   isValidMove(room, x, y) {
-    // Handle tunnel
-    if (x < 0 || x >= this.MAZE_WIDTH) return true;
-    if (y < 0 || y >= this.MAZE_HEIGHT) return false;
-    
-    return room.maze[y][x] !== 0;
+    if (x < 0 || x >= this.MAZE_WIDTH || y < 0 || y >= this.MAZE_HEIGHT) {
+      return false;
+    }
+    return room.maze[y] && room.maze[y][x] !== 0;
   }
 
   startGameLoop(roomId) {
-    const room = this.rooms.get(roomId);
-    if (!room) return;
-
-    const gameLoop = () => {
-      if (room.gameState === 'playing') {
-        this.updateGame(roomId);
-        setTimeout(gameLoop, 150); // ~6-7 FPS for classic feel
+    const loop = () => {
+      const room = this.updateGame(roomId);
+      if (room && room.gameState === 'playing') {
+        // Use global io instance to emit game state
+        if(global.io) {
+          global.io.of('/pacman').to(roomId).emit('gameState', this.getRoomState(roomId));
+        }
+        setTimeout(() => loop(), 50); // ~20 FPS
       }
     };
-
-    gameLoop();
+    loop();
   }
 
   getRoomState(roomId) {
     const room = this.rooms.get(roomId);
     if (!room) return null;
-
+  
+    // Create a serializable version of the room state
+    const players = {};
+    for (const id in room.players) {
+      players[id] = { ...room.players[id] };
+    }
+  
     return {
       id: room.id,
-      players: room.players,
+      players: players,
       ghosts: room.ghosts,
       maze: room.maze,
       gameState: room.gameState,
@@ -330,10 +498,9 @@ class PacmanGame {
       level: room.level,
       pelletsRemaining: room.pelletsRemaining,
       powerPelletActive: room.powerPelletActive,
-      powerPelletTimer: room.powerPelletTimer,
-      gameTimer: room.gameTimer,
-      spectatorCount: room.spectators.size,
-      highScore: room.highScore
+      highScore: room.highScore,
+      // Spectators can be sent as an array of IDs
+      spectators: Array.from(room.spectators)
     };
   }
 
@@ -341,16 +508,9 @@ class PacmanGame {
     const room = this.rooms.get(roomId);
     if (!room) return false;
 
-    if (room.players[playerId]) {
-      delete room.players[playerId];
-      // End game if no players left
-      if (Object.keys(room.players).length === 0) {
-        room.gameState = 'finished';
-      }
-    }
-
+    delete room.players[playerId];
     room.spectators.delete(playerId);
-    return true;
+    return { success: true, data: { message: 'Left room successfully' } };
   }
 
   cleanupRoom(roomId) {
@@ -359,9 +519,9 @@ class PacmanGame {
 
     if (Object.keys(room.players).length === 0 && room.spectators.size === 0) {
       this.rooms.delete(roomId);
-      return true;
+      return { success: true, data: { message: 'Room cleaned up' } };
     }
-    return false;
+    return { success: false, error: 'Room still has players' };
   }
 }
 

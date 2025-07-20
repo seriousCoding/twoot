@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+---
+Before any code change make a plan for the change in a markdown file. Once the markdown is created research the proposed change in the markdown and compare it to the code then revise the plan so that it is a full implementation. After plan is thorough and documement in markdown file implement changes. Always complete task end to end and double chek work.  When code is finished always test and fix until no errors exist. 

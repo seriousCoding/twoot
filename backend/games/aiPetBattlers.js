@@ -1,5 +1,3 @@
-const games = {};
-
 const PET_TYPES = {
   fire: { name: 'Fire Dragon', hp: 100, attack: 25, defense: 15, speed: 20 },
   water: { name: 'Water Turtle', hp: 120, attack: 20, defense: 25, speed: 15 },
@@ -14,234 +12,209 @@ const MOVES = {
   heal: { name: 'Heal', damage: 0, accuracy: 1.0, heal: 30 }
 };
 
-function createGame(roomId) {
-  games[roomId] = {
-    players: {},
-    gameState: 'waiting',
-    currentPlayer: null,
-    round: 1,
-    maxRounds: 10,
-    battleLog: []
-  };
-}
-
-function joinGame(socket, nickname, roomId) {
-  if (!games[roomId]) {
-    createGame(roomId);
+class AIPetBattlersGame {
+  constructor() {
+    this.games = {};
   }
-  
-  const game = games[roomId];
-  game.players[socket.id] = {
-    id: socket.id,
-    nickname: nickname || `Player${Math.floor(Math.random() * 1000)}`,
-    pets: [],
-    activePet: null,
-    wins: 0,
-    aiCode: ''
-  };
-  
-  return game;
-}
 
-function selectPet(socket, roomId, petType) {
-  const game = games[roomId];
-  if (!game || !game.players[socket.id]) return null;
-  
-  const player = game.players[socket.id];
-  if (PET_TYPES[petType]) {
-    const pet = {
-      ...PET_TYPES[petType],
-      type: petType,
-      maxHp: PET_TYPES[petType].hp,
-      currentHp: PET_TYPES[petType].hp,
-      status: 'normal'
+  createGame(roomId) {
+    const game = {
+      players: {},
+      gameState: 'waiting',
+      currentPlayer: null,
+      round: 1,
+      maxRounds: 10,
+      battleLog: []
+    };
+    this.games[roomId] = game;
+    return game;
+  }
+
+  joinGame(socket, playerName, roomId) {
+    let game = this.games[roomId];
+    if (!game) {
+      game = this.createGame(roomId);
+    }
+    
+    game.players[socket.id] = {
+      id: socket.id,
+      nickname: playerName || `Player${Math.floor(Math.random() * 1000)}`,
+      pets: [],
+      activePet: null,
+      wins: 0,
+      aiCode: ''
     };
     
-    player.pets.push(pet);
-    if (!player.activePet) {
-      player.activePet = pet;
+    // Automatically select a pet for simplicity
+    this.selectPet(socket.id, roomId, 'fire');
+
+    if (Object.keys(game.players).length >= 2 && game.gameState === 'waiting') {
+        this.startGame(roomId);
     }
+
+    return game;
+  }
+
+  handleAction(roomId, playerId, data) {
+      switch(data.type) {
+          case 'selectPet':
+              return this.selectPet(playerId, roomId, data.petType);
+          case 'move':
+              return this.executeMove(playerId, roomId, data.moveType, data.target);
+          case 'updateAI':
+              return this.updateAI(playerId, roomId, data.aiCode);
+          default:
+              return this.games[roomId];
+      }
+  }
+
+  getRoomState(roomId) {
+      const game = this.games[roomId];
+      if (!game) return null;
+      return {
+          players: game.players,
+          gameState: game.gameState,
+          currentPlayer: game.currentPlayer,
+          round: game.round,
+          battleLog: game.battleLog
+      };
   }
   
-  return game;
-}
-
-function startGame(roomId) {
-  const game = games[roomId];
-  if (!game) return null;
-  
-  const playerIds = Object.keys(game.players);
-  if (playerIds.length < 2) return null;
-  
-  // Check if all players have pets
-  const allHavePets = playerIds.every(id => game.players[id].pets.length > 0);
-  if (!allHavePets) return null;
-  
-  game.gameState = 'battling';
-  game.currentPlayer = playerIds[0];
-  game.battleLog = [];
-  
-  return game;
-}
-
-function executeMove(socket, roomId, moveType, target) {
-  const game = games[roomId];
-  if (!game || !game.players[socket.id] || game.currentPlayer !== socket.id) return null;
-  
-  const player = game.players[socket.id];
-  const pet = player.activePet;
-  
-  if (!pet || pet.currentHp <= 0) return null;
-  
-  const move = MOVES[moveType];
-  if (!move) return null;
-  
-  const result = {
-    playerId: socket.id,
-    move: moveType,
-    success: Math.random() < move.accuracy,
-    damage: 0,
-    heal: 0,
-    effects: []
-  };
-  
-  if (result.success) {
-    switch (moveType) {
-      case 'attack':
-      case 'strongAttack':
-        const opponentId = Object.keys(game.players).find(id => id !== socket.id);
-        const opponent = game.players[opponentId];
-        const opponentPet = opponent.activePet;
-        
-        if (opponentPet && opponentPet.currentHp > 0) {
-          const baseDamage = pet.attack * move.damage;
-          const defense = opponentPet.defense * (opponentPet.defending || 1);
-          result.damage = Math.max(1, Math.floor(baseDamage - defense));
-          
-          opponentPet.currentHp = Math.max(0, opponentPet.currentHp - result.damage);
-          
-          if (opponentPet.currentHp <= 0) {
-            result.effects.push(`${opponentPet.name} fainted!`);
-            // Switch to next pet if available
-            const nextPet = opponent.pets.find(p => p.currentHp > 0);
-            opponent.activePet = nextPet || null;
-          }
+  leaveRoom(roomId, playerId) {
+    const game = this.games[roomId];
+    if (game && game.players[playerId]) {
+        delete game.players[playerId];
+        if (Object.keys(game.players).length < 2) {
+            game.gameState = 'waiting';
+        } else if (game.currentPlayer === playerId) {
+            this.nextTurn(roomId);
         }
-        break;
-        
-      case 'defend':
-        pet.defending = move.defense;
-        result.effects.push(`${pet.name} is defending!`);
-        break;
-        
-      case 'heal':
-        const healAmount = Math.min(move.heal, pet.maxHp - pet.currentHp);
-        pet.currentHp += healAmount;
-        result.heal = healAmount;
-        result.effects.push(`${pet.name} healed ${healAmount} HP!`);
-        break;
     }
-  } else {
-    result.effects.push('Move missed!');
   }
-  
-  game.battleLog.push(result);
-  
-  // Reset defending status
-  if (pet.defending && moveType !== 'defend') {
-    pet.defending = 1;
-  }
-  
-  // Check for battle end
-  const playerIds = Object.keys(game.players);
-  const activePlayers = playerIds.filter(id => {
-    const player = game.players[id];
-    return player.pets.some(pet => pet.currentHp > 0);
-  });
-  
-  if (activePlayers.length === 1) {
-    game.gameState = 'finished';
-    game.players[activePlayers[0]].wins++;
-  } else {
-    // Switch to next player
-    const currentIndex = playerIds.indexOf(game.currentPlayer);
-    game.currentPlayer = playerIds[(currentIndex + 1) % playerIds.length];
-  }
-  
-  return game;
-}
 
-function updateAI(socket, roomId, aiCode) {
-  const game = games[roomId];
-  if (!game || !game.players[socket.id]) return null;
-  
-  game.players[socket.id].aiCode = aiCode;
-  return game;
-}
+  cleanupRoom(roomId) {
+      const game = this.games[roomId];
+      if (game && Object.keys(game.players).length === 0) {
+          delete this.games[roomId];
+      }
+  }
 
-function executeAI(socket, roomId) {
-  const game = games[roomId];
-  if (!game || !game.players[socket.id]) return null;
-  
-  const player = game.players[socket.id];
-  const aiCode = player.aiCode;
-  
-  if (!aiCode) return null;
-  
-  try {
-    // Create AI context
-    const context = {
-      myPet: player.activePet,
-      myPets: player.pets,
-      opponentPet: null,
-      opponentPets: [],
-      battleLog: game.battleLog,
-      moves: Object.keys(MOVES)
+  selectPet(playerId, roomId, petType) {
+    const game = this.games[roomId];
+    if (!game || !game.players[playerId]) return;
+    
+    const player = game.players[playerId];
+    if (PET_TYPES[petType]) {
+      const pet = {
+        ...PET_TYPES[petType],
+        type: petType,
+        maxHp: PET_TYPES[petType].hp,
+        currentHp: PET_TYPES[petType].hp,
+        status: 'normal'
+      };
+      
+      player.pets.push(pet);
+      if (!player.activePet) {
+        player.activePet = pet;
+      }
+    }
+  }
+
+  startGame(roomId) {
+    const game = this.games[roomId];
+    if (!game) return;
+    
+    const playerIds = Object.keys(game.players);
+    if (playerIds.length < 2) return;
+    
+    const allHavePets = playerIds.every(id => game.players[id].pets.length > 0);
+    if (!allHavePets) return;
+    
+    game.gameState = 'battling';
+    game.currentPlayer = playerIds[0];
+    game.battleLog = [];
+  }
+
+  executeMove(playerId, roomId, moveType, target) {
+    const game = this.games[roomId];
+    if (!game || !game.players[playerId] || game.currentPlayer !== playerId) return;
+    
+    const player = game.players[playerId];
+    const pet = player.activePet;
+    
+    if (!pet || pet.currentHp <= 0) return;
+    
+    const move = MOVES[moveType];
+    if (!move) return;
+    
+    const result = {
+      playerId, move: moveType, success: Math.random() < move.accuracy,
+      damage: 0, heal: 0, effects: []
     };
     
-    // Get opponent info
-    const opponentId = Object.keys(game.players).find(id => id !== socket.id);
-    if (opponentId) {
-      const opponent = game.players[opponentId];
-      context.opponentPet = opponent.activePet;
-      context.opponentPets = opponent.pets;
+    if (result.success) {
+      switch (moveType) {
+        case 'attack':
+        case 'strongAttack':
+          const opponentId = Object.keys(game.players).find(id => id !== playerId);
+          const opponent = game.players[opponentId];
+          const opponentPet = opponent.activePet;
+          
+          if (opponentPet && opponentPet.currentHp > 0) {
+            const baseDamage = pet.attack * move.damage;
+            const defense = opponentPet.defense * (opponentPet.defending || 1);
+            result.damage = Math.max(1, Math.floor(baseDamage - defense));
+            opponentPet.currentHp = Math.max(0, opponentPet.currentHp - result.damage);
+            
+            if (opponentPet.currentHp <= 0) {
+              result.effects.push(`${opponentPet.name} fainted!`);
+              opponent.activePet = opponent.pets.find(p => p.currentHp > 0) || null;
+            }
+          }
+          break;
+        case 'defend':
+          pet.defending = move.defense;
+          result.effects.push(`${pet.name} is defending!`);
+          break;
+        case 'heal':
+          const healAmount = Math.min(move.heal, pet.maxHp - pet.currentHp);
+          pet.currentHp += healAmount;
+          result.heal = healAmount;
+          result.effects.push(`${pet.name} healed ${healAmount} HP!`);
+          break;
+      }
+    } else {
+      result.effects.push('Move missed!');
     }
     
-    // Execute AI code
-    const aiFunction = new Function('context', aiCode + '\nreturn chooseMove(context);');
-    const move = aiFunction(context);
-    
-    if (MOVES[move]) {
-      return executeMove(socket, roomId, move, null);
-    }
-  } catch (error) {
-    console.error('AI execution error:', error);
+    game.battleLog.push(result);
+    if (pet.defending && moveType !== 'defend') pet.defending = 1;
+    this.nextTurn(roomId);
   }
-  
-  return null;
+
+  nextTurn(roomId) {
+    const game = this.games[roomId];
+    if (!game) return;
+
+    const activePlayers = Object.keys(game.players).filter(id => game.players[id].pets.some(p => p.currentHp > 0));
+    
+    if (activePlayers.length <= 1) {
+      game.gameState = 'finished';
+      if (activePlayers.length === 1) {
+        game.players[activePlayers[0]].wins++;
+      }
+    } else {
+      const playerIds = Object.keys(game.players);
+      const currentIndex = playerIds.indexOf(game.currentPlayer);
+      game.currentPlayer = playerIds[(currentIndex + 1) % playerIds.length];
+    }
+  }
+
+  updateAI(playerId, roomId, aiCode) {
+    const game = this.games[roomId];
+    if (!game || !game.players[playerId]) return;
+    game.players[playerId].aiCode = aiCode;
+  }
 }
 
-function removePlayer(socket, roomId) {
-  if (games[roomId]) {
-    delete games[roomId].players[socket.id];
-    
-    if (Object.keys(games[roomId].players).length === 0) {
-      delete games[roomId];
-    } else if (games[roomId].currentPlayer === socket.id) {
-      // Switch to next player
-      const playerIds = Object.keys(games[roomId].players);
-      games[roomId].currentPlayer = playerIds[0];
-    }
-  }
-}
-
-module.exports = {
-  games,
-  joinGame,
-  selectPet,
-  startGame,
-  executeMove,
-  updateAI,
-  executeAI,
-  removePlayer
-};
+module.exports = new AIPetBattlersGame();

@@ -24,16 +24,16 @@ const messagesController = {
           'pm.sender_id as last_message_sender_id',
           knex.raw('COUNT(CASE WHEN pm_unread.is_read = false AND pm_unread.receiver_id = ? THEN 1 END) as unread_count', [userId])
         )
-        .join('users as u1', 'u1.id', 'conversations.participant1_id')
-        .join('users as u2', 'u2.id', 'conversations.participant2_id')
+        .join('users as u1', 'u1.id', '=', 'conversations.participant_1')
+        .join('users as u2', 'u2.id', '=', 'conversations.participant_2')
         .leftJoin('private_messages as pm', function() {
           this.on('pm.conversation_id', '=', 'conversations.id')
               .andOn('pm.created_at', '=', knex.raw('(SELECT MAX(created_at) FROM private_messages WHERE conversation_id = conversations.id)'));
         })
         .leftJoin('private_messages as pm_unread', 'pm_unread.conversation_id', 'conversations.id')
         .where(function() {
-          this.where('conversations.participant1_id', userId)
-              .orWhere('conversations.participant2_id', userId);
+          this.where('conversations.participant_1', userId)
+              .orWhere('conversations.participant_2', userId);
         })
         .groupBy(
           'conversations.id',
@@ -90,10 +90,10 @@ const messagesController = {
       // Check if users are friends
       const friendship = await knex('friendships')
         .where(function() {
-          this.where('user1_id', userId).andWhere('user2_id', participantId);
+          this.where('user_id', userId).andWhere('friend_id', participantId);
         })
         .orWhere(function() {
-          this.where('user1_id', participantId).andWhere('user2_id', userId);
+          this.where('user_id', participantId).andWhere('friend_id', userId);
         })
         .andWhere('status', 'accepted')
         .first();
@@ -105,10 +105,10 @@ const messagesController = {
       // Try to find existing conversation
       let conversation = await knex('conversations')
         .where(function() {
-          this.where('participant1_id', userId).andWhere('participant2_id', participantId);
+          this.where('participant_1', userId).andWhere('participant_2', participantId);
         })
         .orWhere(function() {
-          this.where('participant1_id', participantId).andWhere('participant2_id', userId);
+          this.where('participant_1', participantId).andWhere('participant_2', userId);
         })
         .first();
 
@@ -116,8 +116,8 @@ const messagesController = {
         // Create new conversation
         const [newConversation] = await knex('conversations')
           .insert({
-            participant1_id: Math.min(userId, participantId),
-            participant2_id: Math.max(userId, participantId),
+            participant_1: Math.min(userId, participantId),
+            participant_2: Math.max(userId, participantId),
             created_at: new Date(),
             updated_at: new Date()
           })
@@ -155,7 +155,7 @@ const messagesController = {
       const conversation = await knex('conversations')
         .where('id', conversationId)
         .andWhere(function() {
-          this.where('participant1_id', userId).orWhere('participant2_id', userId);
+          this.where('participant_1', userId).orWhere('participant_2', userId);
         })
         .first();
 
@@ -211,7 +211,7 @@ const messagesController = {
       const conversation = await knex('conversations')
         .where('id', conversationId)
         .andWhere(function() {
-          this.where('participant1_id', userId).orWhere('participant2_id', userId);
+          this.where('participant_1', userId).orWhere('participant_2', userId);
         })
         .first();
 
@@ -220,17 +220,17 @@ const messagesController = {
       }
 
       // Determine receiver
-      const receiverId = conversation.participant1_id === userId 
-        ? conversation.participant2_id 
-        : conversation.participant1_id;
+      const receiverId = conversation.participant_1 === userId 
+        ? conversation.participant_2 
+        : conversation.participant_1;
 
       // Check if users are still friends
       const friendship = await knex('friendships')
         .where(function() {
-          this.where('user1_id', userId).andWhere('user2_id', receiverId);
+          this.where('user_id', userId).andWhere('friend_id', receiverId);
         })
         .orWhere(function() {
-          this.where('user1_id', receiverId).andWhere('user2_id', userId);
+          this.where('user_id', receiverId).andWhere('friend_id', userId);
         })
         .andWhere('status', 'accepted')
         .first();

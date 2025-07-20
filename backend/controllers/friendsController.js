@@ -4,33 +4,27 @@ class FriendsController {
   async getFriends(req, res) {
     try {
       const userId = req.user.id;
-      
       const friends = await db('friendships')
-        .join('users', function() {
-          this.on('friendships.friend_id', '=', 'users.id')
-              .andOn('friendships.user_id', '=', userId);
-        })
-        .orJoin('users', function() {
-          this.on('friendships.user_id', '=', 'users.id')
-              .andOn('friendships.friend_id', '=', userId);
-        })
-        .where('friendships.status', 'accepted')
-        .andWhere('users.id', '!=', userId)
-        .select([
+        .select(
           'users.id',
           'users.username',
           'users.display_name',
           'users.avatar_url',
-          'users.status',
-          'users.last_seen',
-          'users.is_online',
-          'friendships.created_at as friendship_date'
-        ]);
-
+          'friendships.status'
+        )
+        .join('users', function() {
+          this.on('users.id', '=', db.raw('CASE WHEN friendships.user_id = ? THEN friendships.friend_id ELSE friendships.user_id END', [userId]))
+        })
+        .where(function() {
+          this.where('friendships.user_id', userId)
+            .orWhere('friendships.friend_id', userId)
+        })
+        .andWhere('friendships.status', 'accepted');
+  
       res.json(friends);
     } catch (error) {
       console.error('Error fetching friends:', error);
-      res.status(500).json({ message: 'Error fetching friends', error: error.message });
+      res.status(500).json({ error: 'Failed to fetch friends' });
     }
   }
 
